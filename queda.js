@@ -91,6 +91,8 @@ addEventListener('keydown', e => {
   if (e.repeat) return;
   tecla[e.code] = true;
   if (e.code === 'KeyM') { mudo = !mudo; if (droneGanho) droneGanho.gain.value = mudo ? 0 : 0.03; }
+  if (jogo.modo === 'arvore') { teclaArvore(e.code); return; }
+  if (jogo.modo === 'titulo' || jogo.modo === 'morto') { if (e.code === 'KeyT') abrirArvore(); else if (e.code === 'KeyN') recomecar(true); else if (e.code === 'Enter') recomecar(false); }
   const n = e.code.startsWith('Digit') ? +e.code.slice(5) : 0;
   if (jogo.modo === 'pacto') { if (n >= 1 && n <= 3) escolher(n - 1); }
   else if (jogo.modo === 'jogando') {
@@ -121,7 +123,7 @@ let sel = 0, pactoDesde = 0;
 function lerControle() {
   const c = [...navigator.getGamepads()].find(p => p && p.connected);
   pad.ligado = !!c;
-  pad.mx = pad.my = 0; pad.pulo = false; pad.mirando = pad.atirar = pad.dash = pad.foco = pad.cima = pad.baixo = pad.ok = false;
+  pad.mx = pad.my = 0; pad.pulo = false; pad.mirando = pad.atirar = pad.dash = pad.foco = pad.cima = pad.baixo = pad.ok = false; pad.esq = pad.volta = pad.y2 = pad.x2 = false;
   if (!c) return;
   const b = i => !!(c.buttons[i] && c.buttons[i].pressed);
   const eixo = i => Math.abs(c.axes[i] || 0) > 0.22 ? c.axes[i] : 0;
@@ -140,6 +142,7 @@ function lerControle() {
   pad.cima = apertou('cima', b(12) || eixo(1) < -0.5);
   pad.baixo = apertou('baixo', b(13) || eixo(1) > 0.5);
   pad.ok = apertou('ok', b(0) || b(9));
+  pad.esq = apertou('esq2', b(14) || eixo(0) < -0.5); pad.volta = apertou('b2', b(1)); pad.y2 = apertou('y2', b(3)); pad.x2 = apertou('x2', b(2));
 }
 
 // ---------- sprites ----------
@@ -249,21 +252,114 @@ const PATENTES = ['VERME', 'CARNICEIRO', 'ACOUGUEIRO', 'CARRASCO', 'CEIFADOR', '
 const metaPatente = p => 60 * p * (p + 1);                 // 120, 360, 720, 1200, 1800...
 const patente = () => { let p = 0; while (caveiras >= metaPatente(p + 1)) p++; return p; };
 const nomePatente = () => PATENTES[Math.min(PATENTES.length - 1, patente())];
-const PREMIOS = [s => { s.dano *= 1.1; }, s => { s.vidaMax += 1; }, s => { s.cadencia *= 1.08; }, s => { s.velHeroi *= 1.06; }, s => { s.sorte += 0.5; }];
+// ARVORE: cada patente da 1 ponto. O que voce poe aqui fica no personagem para sempre, em toda descida.
+// Da para tirar e por de novo a vontade: o ponto nunca se perde.
+const RAMOS = [
+  { nome: 'FORCA',    desc: '+12% de dano',                         max: 6, f: (s, d) => { s.dano *= Math.pow(1.12, d); } },
+  { nome: 'CARNE',    desc: '+1 coracao',                           max: 6, f: (s, d) => { s.vidaMax += d; } },
+  { nome: 'FRENESI',  desc: '+8% de cadencia',                      max: 6, f: (s, d) => { s.cadencia *= Math.pow(1.08, d); } },
+  { nome: 'PERNAS',   desc: '+5% de velocidade, dash volta antes',  max: 6, f: (s, d) => { s.velHeroi *= Math.pow(1.05, d); s.recargaDash *= Math.pow(0.94, d); } },
+  { nome: 'ODIO',     desc: 'raiva enche +15%, surto dura +0.6s',   max: 6, f: (s, d) => { s.raivaGanho *= Math.pow(1.15, d); s.surtoDura += 0.6 * d; } },
+  { nome: 'GANANCIA', desc: 'armas melhores no chao e nos baus',    max: 6, f: (s, d) => { s.sorte += 0.5 * d; } },
+];
+let arvore = RAMOS.map(() => 0), selA = 0;
+try { const a = JSON.parse(localStorage.getItem('cripta-arvore')); if (Array.isArray(a)) arvore = RAMOS.map((r, i) => Math.max(0, Math.min(r.max, a[i] | 0))); } catch (e) {}
+const pontosLivres = () => patente() - arvore.reduce((a, b) => a + b, 0);
+function aplicarArvore(s, vet) { RAMOS.forEach((r, i) => { if (vet[i]) r.f(s, vet[i]); }); }
 function aplicarPatente() {
-  lerCaveiras();
-  const s = jogo.stats, p = patente();
-  for (let i = 0; i < p; i++) PREMIOS[i % PREMIOS.length](s);
-  jogo.heroi.vida = s.vidaMax;
-  if (p >= 2) jogo.armas[1] = gerarArma(1, Math.min(4, p * 0.5));      // da patente 2 em diante, a segunda arma ja vem sorteada (e melhor)
+  if (typeof lerCaveiras === 'function') lerCaveiras();
+  while (pontosLivres() < 0) arvore[arvore.findIndex(v => v > 0)]--;
+  const s = jogo.stats;
+  aplicarArvore(s, arvore); jogo.arv = arvore.slice();
+  s.vidaMax = Math.round(s.vidaMax); jogo.heroi.vida = s.vidaMax;
+  if (patente() >= 2) jogo.armas[1] = gerarArma(1, Math.min(4, patente() * 0.5));      // da patente 2 em diante, a segunda arma ja vem sorteada (e melhor)
+}
+function abrirArvore() { jogo.modoAntes = jogo.modo; jogo.modo = 'arvore'; selA = 0; }
+function mexerArvore(i, d) {
+  if (d > 0 ? pontosLivres() <= 0 || arvore[i] >= RAMOS[i].max : arvore[i] <= 0) { som('raspao'); return; }
+  arvore[i] += d; som('pegar');
+  try { localStorage.setItem('cripta-arvore', JSON.stringify(arvore)); } catch (e) {}
+}
+function teclaArvore(c) {
+  const n = RAMOS.length;
+  if (c === 'KeyW' || c === 'ArrowUp') selA = (selA + n - 1) % n;
+  else if (c === 'KeyS' || c === 'ArrowDown') selA = (selA + 1) % n;
+  else if (c === 'KeyD' || c === 'ArrowRight' || c === 'Enter' || c === 'Space') mexerArvore(selA, 1);
+  else if (c === 'KeyA' || c === 'ArrowLeft') mexerArvore(selA, -1);
+  else if (c === 'Escape' || c === 'KeyT') jogo.modo = jogo.modoAntes;
+}
+const linhaArvore = i => ({ x: 14, y: 38 + i * 20, w: W - 28, h: 18 });
+function controleArvore() {
+  if (pad.cima) teclaArvore('KeyW');
+  if (pad.baixo) teclaArvore('KeyS');
+  if (pad.ok) teclaArvore('KeyD');
+  if (pad.esq) teclaArvore('KeyA');
+  if (pad.volta || pad.x2) { teclaArvore('Escape'); return; }
+  if (!mouse.clicou) return;
+  const my = mouse.y + TOPO;
+  for (let i = 0; i < RAMOS.length; i++) { const c = linhaArvore(i); if (mouse.x >= c.x && mouse.x < c.x + c.w && my >= c.y && my < c.y + c.h) { selA = i; mexerArvore(i, 1); } }
+}
+function desenharArvore() {
+  g.fillStyle = '#07060a'; g.fillRect(0, 0, W, H);
+  texto('O QUE FICA COM VOCE', W / 2, 8, CORES.y, 'center');
+  const pts = pontosLivres();
+  texto(nomePatente() + '  -  ' + (pts > 0 ? pts + (pts > 1 ? ' pontos para gastar' : ' ponto para gastar') : 'proximo ponto: ' + (metaPatente(patente() + 1) - caveiras) + ' caveiras'), W / 2, 20, pts > 0 ? '#ffffff' : '#6a6478', 'center');
+  RAMOS.forEach((r, i) => {
+    const c = linhaArvore(i);
+    g.fillStyle = i === selA ? '#5a8cf0' : '#2a2636'; g.fillRect(c.x, c.y, c.w, c.h);
+    g.fillStyle = i === selA ? '#1c1a2c' : '#110f18'; g.fillRect(c.x + 1, c.y + 1, c.w - 2, c.h - 2);
+    texto(r.nome, c.x + 4, c.y + 1, arvore[i] ? CORES.y : '#e8e4d8');
+    texto(r.desc, c.x + 4, c.y + 9, '#6a6478');
+    for (let k = 0; k < r.max; k++) { g.fillStyle = k < arvore[i] ? CORES.e : '#3a2a30'; g.fillRect(c.x + c.w - 6 - (r.max - k) * 7, c.y + 3, 5, 5); }
+  });
+  texto('W S escolhe  -  D ou clique poe  -  A tira', W / 2, 162, null, 'center');
+  texto(pad.ligado ? 'controle: A poe - esquerda tira - B volta' : 'T ou Esc volta', W / 2, 173, '#5a8cf0', 'center');
+}
+// SELO: no andar seguinte a cada chefao ha um selo e um bau. Gravar ali guarda o personagem inteiro
+// (armas, pactos, reliquias, nivel) e deposita as caveiras. Morreu, voce volta para o ultimo selo gravado.
+const CHAVE_SELO = 'queda-selo';
+let seloSalvo = null;
+try { const v = JSON.parse(localStorage.getItem(CHAVE_SELO)); if (v && v.andar > 1 && v.stats && v.armas && v.armas[0]) seloSalvo = v; } catch (e) {}
+function gravarSelo() {
+  const h = jogo.heroi, s = jogo.stats;
+  try { caveiras = Math.max(caveiras, +localStorage.getItem('cripta-caveiras') || 0); } catch (e) {}
+  caveiras += jogo.abates - jogo.banco; jogo.banco = jogo.abates;
+  try { localStorage.setItem('cripta-caveiras', caveiras); } catch (e) {}
+  h.vida = s.vidaMax;
+  seloSalvo = JSON.parse(JSON.stringify({ andar: jogo.andar, stats: s, armas: jogo.armas, armaAtual: jogo.armaAtual, nivel: jogo.nivel, xp: jogo.xp, chaves: jogo.chaves,
+    reliquias: jogo.reliquias.map(r => r.nome), abates: jogo.abates, comboMax: jogo.comboMax, arv: jogo.arv }));
+  try { localStorage.setItem(CHAVE_SELO, JSON.stringify(seloSalvo)); } catch (e) {}
+  som('reliquia'); avisar('SELO GRAVADO', 'se morrer, voce volta para ca'); faisca(h.x, h.y, CORES.e, 30, 160); jogo.tremor = Math.max(jogo.tremor, 0.2);
+}
+function carregarSelo(sv) {
+  const s = jogo.stats, h = jogo.heroi;
+  Object.assign(s, sv.stats);
+  aplicarArvore(s, arvore.map((v, i) => v - ((sv.arv || [])[i] || 0)));      // pontos postos (ou tirados) depois de gravar tambem valem
+  jogo.arv = arvore.slice();
+  jogo.armas = JSON.parse(JSON.stringify(sv.armas)); jogo.armaAtual = jogo.armas[sv.armaAtual] ? sv.armaAtual : 0;
+  jogo.nivel = sv.nivel || 1; jogo.xp = sv.xp || 0; jogo.chaves = sv.chaves || 0; jogo.comboMax = sv.comboMax || 0;
+  jogo.reliquias = (sv.reliquias || []).map(n => RELIQUIAS.find(r => r.nome === n)).filter(Boolean);
+  jogo.abates = jogo.banco = sv.abates || 0;
+  s.vidaMax = Math.max(1, Math.round(s.vidaMax)); h.vida = s.vidaMax;
+  descer(sv.andar);
+}
+function recomecar(doZero) {
+  const sv = doZero ? null : seloSalvo;
+  novoJogo('jogando');
+  if (sv) carregarSelo(sv);
+}
+function linhasRecomeco(y) {
+  const sv = seloSalvo, pts = pontosLivres();
+  texto(sv ? 'clique ou A: voltar ao selo do andar ' + sv.andar : 'clique ou A: descer', W / 2, y, '#5a8cf0', 'center');
+  texto((sv ? 'N: do andar 1  -  ' : '') + 'T: arvore' + (pts > 0 ? ' (' + pts + (pts > 1 ? ' pontos!)' : ' ponto!)') : ''), W / 2, y + 10, pts > 0 ? CORES.y : '#6a6478', 'center');
 }
 // RAIVA: enche matando e, principalmente, apanhando. Encheu = SURTO.
 const metaRaiva = () => 26 + jogo.andar * 2;
 function ganharRaiva(q) {
   if (jogo.surto > 0) return;
-  jogo.raiva += q;
+  jogo.raiva += q * jogo.stats.raivaGanho;
   if (jogo.raiva < metaRaiva()) return;
-  jogo.raiva = 0; jogo.surto = 6; jogo.pausa = 0.25; jogo.tremor = 0.6; jogo.flashT = 0.3;
+  jogo.raiva = 0; jogo.surto = jogo.stats.surtoDura; jogo.pausa = 0.25; jogo.tremor = 0.6; jogo.flashT = 0.3;
   for (const b of jogo.balas) b.fora = true;
   som('chefe'); avisar('SURTO!', 'atropele tudo');
 }
@@ -276,13 +372,13 @@ function novoJogo(modo) {
     stats: { dano: 1, cadencia: 1, velBala: 1, quiques: 0, perfurar: 0, espalha: 1, explosao: 1, queimar: 0, critico: 0, alcance: 1,
              vidaMax: 5, velHeroi: 1, recargaDash: 0.6, hitbox: 2, velBalaInimiga: 1, xp: 1, luz: 0,
              danoCorpo: 1, danoTiro: 1, balasExtra: 0, explosaoBase: 0, dashDist: 1, focoGanho: 1, focoGasto: 1,
-             furiaGanho: 1, furiaDura: 1, sorte: 0, vidaInimiga: 1, reviver: 0, trocaBonus: 0, orbes: 0 },
+             furiaGanho: 1, furiaDura: 1, raivaGanho: 1, surtoDura: 6, sorte: 0, vidaInimiga: 1, reviver: 0, trocaBonus: 0, orbes: 0 },
     heroi: { x: W / 2, y: AS / 2, vida: 5, dx: 0, dy: -1, dashT: 0, dashRecarga: 0, invencivel: 0, vy: 0, noChao: false, coyote: 0, pulos: 1, cair: 0, lado: 1 },
     armas: [gerarArma(1, 0, 'pistola'), gerarArma(1, 0, 'espada')], armaAtual: 0,
     mira: -Math.PI / 2, tiroT: 0, chaves: 0, nivel: 1, xp: 0, foco: 0.5, lento: false,
     tiros: [], balas: [], inimigos: [], particulas: [], efeitos: [], combate: false, chefe: null,
     escolhas: [], aviso: '', aviso2: '', avisoT: 0, novoRecorde: false,
-    reliquias: [], lente: [], raiva: 0, surto: 0, vinganca: null, combo: 0, comboT: 0, comboMax: 0, golpeTroca: false,
+    reliquias: [], lente: [], raiva: 0, surto: 0, vinganca: null, banco: 0, arv: null, combo: 0, comboT: 0, comboMax: 0, golpeTroca: false,
   };
   aplicarPatente();
   descer(1);
@@ -300,6 +396,9 @@ const tetoFuria = () => 20 + jogo.andar * 3;              // quanto mais fundo, 
 const furia = () => Math.min(jogo.combo, tetoFuria()) * 0.016;
 // LOUCURA: comeca em 1 no andar 1 e sobe 8% por andar. Quase tudo que acelera no jogo consulta este numero.
 const loucura = () => 1 + (jogo.andar - 1) * 0.08;
+// CICLO: a cada 9 andares (3 chefoes) a cripta sobe um degrau inteiro de crueldade. Nao tem teto: e isso que faz ela nao ter fundo.
+const ciclo = () => Math.floor((jogo.andar - 1) / 9);
+const dureza = () => Math.pow(1.6, ciclo());               // vida dos inimigos: x1.6 por ciclo, em cima do que ja sobe por andar
 function curar(n) { const h = jogo.heroi; if (h.vida < jogo.stats.vidaMax) { h.vida = Math.min(jogo.stats.vidaMax, h.vida + n); som('pegar'); } }
 // avisa todas as reliquias que algo aconteceu ('aoMatar', 'aoDash', 'aoFerido', 'aoDescer')
 function gatilho(nome, x) { for (const r of jogo.reliquias) if (r[nome]) r[nome](x); }
@@ -325,7 +424,9 @@ function descer(n) {
   jogo.mapa = gerarAndar(n, n > 1 && sala ? sala.saida : 8);
   if (n > 1) { curar(1); som('descer'); gatilho('aoDescer'); }
   entrarSala(jogo.mapa.inicio, null);
-  avisar('ANDAR ' + n + ' - ' + temaDoAndar(n).nome);
+  const temSelo = n > 1 && (n - 1) % 3 === 0 && jogo.modo === 'jogando';
+  if (temSelo) sala.objetos.push({ tipo: 'selo', x: sala.objX - 28, y: CHAO_Y }, { tipo: 'bau', x: sala.objX + 30, y: CHAO_Y, sorte: 1.5 });
+  avisar('ANDAR ' + n + ' - ' + temaDoAndar(n).nome, n > 1 && (n - 1) % 9 === 0 ? 'CICLO ' + (ciclo() + 1) + ': a cripta ficou mais cruel' : temSelo ? 'ha um selo aqui' : '');
   // o tumulo da sua ultima morte guarda a arma que voce segurava: volte ate la para buscar
   const t = jogo.modo === 'jogando' ? lerTumulo() : null;
   if (t && t.andar === n) {
@@ -424,7 +525,7 @@ const TIPOS = {
 };
 TIPOS.bomba.voa = TIPOS.olho.voa = TIPOS.caveira.voa = true;      // de lado, estes flutuam; os outros andam e pulam
 function criarInimigo(tipo, x, y, elite) {
-  const T = TIPOS[tipo], a = jogo.andar, vida = T.praga ? Math.ceil(a / 4) : Math.ceil(T.vida * (1 + (a - 1) * 0.22) * (elite ? 3.5 : 1) * jogo.stats.vidaInimiga);
+  const T = TIPOS[tipo], a = jogo.andar, vida = T.praga ? Math.ceil(a / 4) : Math.ceil(T.vida * (1 + (a - 1) * 0.28) * (elite ? 3.5 : 1) * jogo.stats.vidaInimiga * dureza());
   const e = { tipo, x, y, r: T.r, vida, vidaMax: vida, xp: T.xp * (elite ? 4 : 1), elite: !!elite, cor: elite ? CORES.y : T.cor,
     nasce: Math.max(0.3, 0.75 - loucura() * 0.15), tiroT: 0.5 + Math.random() * 1.2, lado: Math.random() < 0.5 ? 1 : -1, fase: Math.random() * 6, fogo: 0, fogoDps: 0, piscar: 0,
     invT: 0.6 + Math.random(), carga: 0, corre: 0, angInv: 0, giro: Math.random() * 6, travado: false, vy: 0, puloT: Math.random(), cair: 0, noChao: false };
@@ -437,7 +538,7 @@ function povoar(s) {
   const vaga = () => { const [x, y] = vagas[rand(vagas.length)] || [9, 12]; return [x * TL + 6, y * TL + 6]; };
   if (s.tipo === 'chefe') {
     const v = (Math.floor(a / 3) + 2) % 3, C = CHEFES[v];      // andar 3 = Guardiao, 6 = Ceifadora, 9 = Olho, 12 = Guardiao de novo...
-    const vida = Math.round(240 * (1 + (a - 3) * 0.3) * jogo.stats.vidaInimiga);
+    const vida = Math.round(240 * (1 + (a - 3) * 0.3) * jogo.stats.vidaInimiga * dureza());
     jogo.chefe = { tipo: 'chefe', chefe: true, variante: v, x: W / 2, y: v === 2 ? AS / 2 - 10 : 44, r: 14, vida, vidaMax: vida, xp: 0, cor: C.cor, troca: { r: C.cor },
       nasce: 1.2, t: 0, tiroT: 1, tiro2: 2.5, giro: 0, carga: 0, corre: 0, rastro: 0, golpes: 0, angInv: 0, fogo: 0, fogoDps: 0, piscar: 0 };
     jogo.inimigos.push(jogo.chefe); som('chefe'); avisar(C.nome + ' DESPERTA');
@@ -449,17 +550,18 @@ function povoar(s) {
   if (s.mod === 'horda') { pesos.esqueleto = pesos.olho = pesos.caveira = pesos.vigia = pesos.totem = 0; }
   const total = Object.values(pesos).reduce((x, y) => x + y, 0);
   const sortear = () => { let r = Math.random() * total; for (const k in pesos) if ((r -= pesos[k]) <= 0) return k; return 'gosma'; };
-  let n = Math.min(18, 4 + Math.floor(a * 0.9) + rand(2));
+  let n = Math.min(18 + ciclo() * 4, 4 + ciclo() * 2 + Math.floor(a * 0.9) + rand(2));
   if (s.mod === 'horda') n = Math.round(n * 1.8);
   // reforcos: alem dos que ja estao na sala, mais inimigos vao chegando um a um durante a luta
   s.reserva = Math.floor(a * (s.mod === 'horda' ? 1.3 : 0.8)); s.sortear = sortear;
   s.reforcoCada = Math.max(0.45, 2.4 - loucura()); s.reforcoT = s.reforcoCada;
   for (let i = 0; i < n; i++) { const [x, y] = vaga(); criarInimigo(sortear(), x, y, false); }
   for (let i = 3 + Math.floor(a * 0.8) + rand(3); i > 0; i--) { const [x, y] = vaga(); criarInimigo('rato', x, y, false); }      // carne para moer
+  for (let i = Math.min(4, ciclo()); i > 0; i--) { const [x, y] = vaga(); criarInimigo(sortear(), x, y, true); }      // cada ciclo poe mais um elite em toda sala
   if ((s.mod === 'elite' || s.tipo === 'escada') && !s.ondas) { const [x, y] = vaga(); criarInimigo(sortear(), x, y, true); }   // o elite vem na ultima onda
 }
 function bala(x, y, ang, vel, cor) {
-  vel *= jogo.stats.velBalaInimiga * Math.min(2.2, 1.05 + jogo.andar * 0.04);
+  vel *= jogo.stats.velBalaInimiga * Math.min(2.2 + ciclo() * 0.15, 1.05 + jogo.andar * 0.04);
   jogo.balas.push({ x, y, vx: Math.cos(ang) * vel, vy: Math.sin(ang) * vel, cor: cor || '#ff5ea8', dono: atirador });
 }
 
@@ -577,7 +679,7 @@ function fimDeJogo() {
   jogo.modo = 'morto';
   lerCaveiras();
   const antes = patente();
-  caveiras += jogo.abates; jogo.subiu = patente() > antes;
+  caveiras += jogo.abates - jogo.banco; jogo.subiu = patente() > antes;
   try { localStorage.setItem('cripta-caveiras', caveiras); } catch (e) {}
   estracalhar(jogo.heroi.x, jogo.heroi.y, CORES.p, 10, false); sangrar(jogo.heroi.x, jogo.heroi.y, -1.57, 60); som('tripa');
   try { localStorage.setItem('queda-tumulo', JSON.stringify({ andar: jogo.andar, arma: arma() })); } catch (e) {}
@@ -586,7 +688,7 @@ function fimDeJogo() {
 function ferirHeroi(quem) {
   const h = jogo.heroi, s = jogo.stats;
   if (h.invencivel > 0 || jogo.surto > 0) return;
-  h.vida--; h.invencivel = 0.9; jogo.tremor = 0.3; som('dano');
+  h.vida -= 1 + Math.floor(ciclo() / 2); h.invencivel = 0.9;      // do andar 19 em diante cada golpe arranca 2 coracoes; do 37, 3 jogo.tremor = 0.3; som('dano');
   jogo.combo = 0;                                        // apanhou: a furia acaba
   faisca(h.x, h.y, CORES.r, 14);
   sangrar(h.x, h.y, Math.random() * 6.28, 12); jogo.pausa = 0.08; jogo.flashT = 0.15;
@@ -603,7 +705,7 @@ function matar(e, a) {
   e.morto = true; jogo.abates++;
   if (jogo.vinganca && jogo.vinganca.e === e) { jogo.vinganca = null; curar(1); avisar('VINGANCA', '+1 coracao'); faisca(e.x, e.y, CORES.r, 24, 160); }
   ganharRaiva(e.elite ? 5 : TIPOS[e.tipo] && TIPOS[e.tipo].praga ? 0.5 : 1);
-  if (jogo.surto > 0) jogo.surto = Math.min(6, jogo.surto + 0.15);       // matar durante o surto estica o surto
+  if (jogo.surto > 0) jogo.surto = Math.min(jogo.stats.surtoDura, jogo.surto + 0.15);       // matar durante o surto estica o surto
   const s = jogo.stats, h = jogo.heroi, T = TIPOS[e.tipo];
   const marco = Math.floor(jogo.combo / 25), antesC = jogo.combo;
   jogo.combo += s.furiaGanho * (T && T.praga ? 0.5 : 1); jogo.comboT = 2.6 * s.furiaDura;
@@ -1017,7 +1119,7 @@ function atualizar(dt) {
   for (const o of sala.objetos) {
     const d = Math.hypot(o.x - h.x, o.y - h.y);
     if (o.tipo === 'bau' && !o.usado && d < 12) { o.usado = true; som('pegar'); soltarArma(o.x, o.y - 14, o.sorte); faisca(o.x, o.y, CORES.y, 14); }
-    else if (((o.tipo === 'altar' || o.tipo === 'sangue') && !o.usado || o.tipo === 'escada') && d < 13 && !jogo.perto) jogo.perto = { obj: o, d };
+    else if (((o.tipo === 'altar' || o.tipo === 'sangue' || o.tipo === 'selo') && !o.usado || o.tipo === 'escada') && d < 13 && !jogo.perto) jogo.perto = { obj: o, d };
   }
   if (pedidoUsar && jogo.perto) {
     const p = jogo.perto;
@@ -1025,7 +1127,8 @@ function atualizar(dt) {
       const vaga = jogo.armas[1] ? jogo.armaAtual : 1, velha = jogo.armas[vaga];
       jogo.armas[vaga] = p.it.arma; jogo.armaAtual = vaga; som('pegar');
       if (velha) p.it.arma = velha; else p.it.fora = true;
-    } else if (p.obj.tipo === 'altar') { p.obj.usado = true; abrirEscolha(); }
+    } else if (p.obj.tipo === 'selo') { p.obj.usado = true; gravarSelo(); }
+    else if (p.obj.tipo === 'altar') { p.obj.usado = true; abrirEscolha(); }
     else if (p.obj.tipo === 'sangue') {                    // altar de sangue: 1 coracao maximo por uma reliquia
       if (s.vidaMax > 1) { p.obj.usado = true; s.vidaMax--; h.vida = Math.max(1, Math.min(h.vida, s.vidaMax)); som('dano'); jogo.tremor = 0.3; soltarReliquia(p.obj.x, p.obj.y - 16); }
       else avisar('VOCE NAO TEM O QUE DAR');
@@ -1104,6 +1207,10 @@ function desenhar() {
       g.fillStyle = CORES.e; g.fillRect(x - 1, y, 2, 2);
     } else if (o.tipo === 'urna') {
       g.fillStyle = '#8a6a4c'; g.fillRect(x - 3, y - 2, 6, 8); g.fillRect(x - 4, y, 8, 4); g.fillStyle = '#3a2a1c'; g.fillRect(x - 2, y - 3, 4, 1);
+    } else if (o.tipo === 'selo') {                        // uma lamina fincada numa pedra
+      g.fillStyle = '#2a2636'; g.fillRect(x - 6, y + 2, 12, 4); g.fillStyle = '#14121c'; g.fillRect(x - 6, y + 5, 12, 1);
+      g.fillStyle = o.usado ? '#6a6478' : CORES.e; g.fillRect(x - 1, y - 9, 2, 11); g.fillRect(x - 4, y - 5, 8, 2);
+      if (!o.usado && Math.floor(jogo.tempo * 4) % 2) { g.fillStyle = '#ffffff'; g.fillRect(x - 1, y - 9, 2, 2); }
     } else if (o.tipo === 'tumulo') {
       g.fillStyle = '#6a6478'; g.fillRect(x - 4, y - 6, 8, 10); g.fillRect(x - 3, y - 7, 6, 1);
       g.fillStyle = '#2f2a3c'; g.fillRect(x - 1, y - 4, 2, 6); g.fillRect(x - 2, y - 2, 4, 1);
@@ -1226,7 +1333,7 @@ function desenhar() {
       const y = Math.max(2, Math.min(AS - 24, p.it.y - 26));
       texto(nova.nome, W / 2, y, nova.cor, 'center');
       texto(botao + ': pegar  (' + (dif >= 0 ? '+' : '') + dif + '% dano/s)', W / 2, y + 10, dif >= 0 ? CORES.g : CORES.r, 'center');
-    } else if (p && p.obj) texto(botao + (p.obj.tipo === 'altar' ? ': fazer um pacto' : p.obj.tipo === 'sangue' ? ': -1 coracao max, +1 reliquia' : ': descer'), W / 2, p.obj.y - 22, '#ffffff', 'center');
+    } else if (p && p.obj) texto(botao + (p.obj.tipo === 'selo' ? (seloSalvo && seloSalvo.andar > jogo.andar ? ': gravar (apaga o selo do andar ' + seloSalvo.andar + ')' : ': gravar o selo') : p.obj.tipo === 'altar' ? ': fazer um pacto' : p.obj.tipo === 'sangue' ? ': -1 coracao max, +1 reliquia' : ': descer'), W / 2, p.obj.y - 22, '#ffffff', 'center');
   }
   if (jogo.avisoT > 0) { texto(jogo.aviso, W / 2, 30, CORES.y, 'center'); if (jogo.aviso2) texto(jogo.aviso2, W / 2, 40, '#ffffff', 'center'); }
 
@@ -1250,7 +1357,7 @@ function desenhar() {
   desenharMinimapa();
   // barra de raiva, no pe da tela. No surto ela vira o relogio do surto.
   g.fillStyle = '#2a2636'; g.fillRect(0, H - 2, W, 2);
-  if (jogo.surto > 0) { g.fillStyle = Math.floor(jogo.tempo * 14) % 2 ? '#ffffff' : CORES.e; g.fillRect(0, H - 2, W * jogo.surto / 6, 2); }
+  if (jogo.surto > 0) { g.fillStyle = Math.floor(jogo.tempo * 14) % 2 ? '#ffffff' : CORES.e; g.fillRect(0, H - 2, W * Math.min(1, jogo.surto / s.surtoDura), 2); }
   else { g.fillStyle = CORES.r; g.fillRect(0, H - 2, W * Math.min(1, jogo.raiva / metaRaiva()), 2); }
   jogo.reliquias.forEach((r, i) => { g.fillStyle = '#000000'; g.fillRect(1, TOPO + 13 + i * 5, 5, 5); g.fillStyle = r.cor || '#ffffff'; g.fillRect(2, TOPO + 14 + i * 5, 3, 3); });
   texto(a.nome, 3, H - 10, a.cor);
@@ -1258,7 +1365,8 @@ function desenhar() {
   if (outra) texto(outra.nome, W - 3, H - 10, '#6a6478', 'right');
 
   if (jogo.modo !== 'jogando') { g.fillStyle = '#000000c8'; g.fillRect(0, 0, W, H); }
-  if (jogo.modo === 'titulo') {
+  if (jogo.modo === 'arvore') desenharArvore();
+  else if (jogo.modo === 'titulo') {
     texto('CRIPTA: A QUEDA', W / 2, 18, CORES.y, 'center');
     texto('ninguem voltou la de baixo.', W / 2, 32, '#6a6478', 'center');
     texto('voce tambem nao vai.', W / 2, 42, '#6a6478', 'center');
@@ -1270,7 +1378,7 @@ function desenhar() {
     texto('esq anda - dir mira e ataca - RT auto', W / 2, 123, null, 'center');
     texto('A/LB pula - RB dash - X usa - Y troca', W / 2, 133, null, 'center');
     texto('recorde: andar ' + recorde + '  -  ' + nomePatente(), W / 2, 154, CORES.y, 'center');
-    texto(pad.ligado ? 'clique ou aperte A' : 'clique para cair', W / 2, 170, '#5a8cf0', 'center');
+    linhasRecomeco(165);
   } else if (jogo.modo === 'pacto') {
     texto('ASSINE COM SANGUE', W / 2, 28, CORES.y, 'center');
     jogo.escolhas.forEach((u, i) => {
@@ -1287,12 +1395,12 @@ function desenhar() {
     texto(jogo.novoRecorde ? 'NOVO RECORDE!' : 'recorde: andar ' + recorde, W / 2, 94, CORES.y, 'center');
     texto('maior furia x' + jogo.comboMax + '  -  ' + jogo.reliquias.length + ' reliquias', W / 2, 106, '#6a6478', 'center');
     texto('sua arma ficou num tumulo no andar ' + jogo.andar + '.', W / 2, 120, '#b48cff', 'center');
-    texto('clique ou A para cair de novo', W / 2, 136, '#5a8cf0', 'center');
+    linhasRecomeco(130);
     const pt = patente(), de = metaPatente(pt), ate = metaPatente(pt + 1);
     texto((jogo.subiu ? 'SUBIU DE PATENTE: ' : 'patente: ') + nomePatente(), W / 2, 152, jogo.subiu ? CORES.y : '#e8e4d8', 'center');
     g.fillStyle = '#2a2636'; g.fillRect(60, 164, 120, 3);
     g.fillStyle = CORES.r; g.fillRect(60, 164, Math.round(120 * (caveiras - de) / (ate - de)), 3);
-    texto('+' + jogo.abates + ' caveiras  (' + caveiras + ' / ' + ate + ')', W / 2, 170, '#6a6478', 'center');
+    texto('+' + (jogo.abates - jogo.banco) + ' caveiras  (' + caveiras + ' / ' + ate + ')', W / 2, 170, '#6a6478', 'center');
   }
 }
 
@@ -1317,7 +1425,7 @@ function quadro(agora) {
       }
   } else {
     if (jogo.modo === 'morto') atualizarParticulas(dt);    // os seus pedacos continuam caindo na tela de morte
-    if (mouse.clicou || pad.ok) { novoJogo('jogando'); mouse.baixo = false; }
+    if (jogo.modo === 'arvore') controleArvore(); else if (mouse.clicou || pad.ok || pad.y2) { recomecar(pad.y2); mouse.baixo = false; } else if (pad.x2) abrirArvore();
   }
   mouse.clicou = false;
   desenhar();

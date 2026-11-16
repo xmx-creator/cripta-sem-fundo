@@ -13,6 +13,10 @@ Os dois dividem armas, pactos, relíquias e a **patente**: cada abate vira uma c
 - **Execução**: inimigo piscando em vermelho morre na hora com um dash, e o dash volta.
 - **Vingança**: mate quem te feriu em 7 segundos e o coração volta.
 
+- **Sem fundo de verdade**: a cada 9 andares começa um ciclo novo. Inimigos com muito mais vida, um elite a mais por sala e, do andar 19 em diante, cada golpe arranca 2 corações.
+- **Selo**: no andar seguinte a cada chefão há um selo e um baú. Gravar ali guarda o personagem inteiro; morreu, você volta para o último selo.
+- **Árvore**: cada patente dá um ponto permanente para gastar em força, vida, cadência, pernas, ódio ou ganância (tecla T no título ou na tela de morte).
+
 ## Controles
 
 | | Cripta Sem Fundo | A Queda |
